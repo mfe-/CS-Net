@@ -17,10 +17,10 @@ def threshold(image):
 
 
 def numeric_score(pred, gt):
-    FP = np.float(np.sum((pred == 255) & (gt == 0)))
-    FN = np.float(np.sum((pred == 0) & (gt == 255)))
-    TP = np.float(np.sum((pred == 255) & (gt == 255)))
-    TN = np.float(np.sum((pred == 0) & (gt == 0)))
+    FP = float(np.sum((pred == 255) & (gt == 0)))
+    FN = float(np.sum((pred == 0) & (gt == 255)))
+    TP = float(np.sum((pred == 255) & (gt == 255)))
+    TN = float(np.sum((pred == 0) & (gt == 0)))
     return FP, FN, TP, TN
 
 
