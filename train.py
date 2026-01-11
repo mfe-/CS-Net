@@ -1,6 +1,7 @@
 """
 Training script for CS-Net
 """
+
 import os
 import torch
 import torch.nn as nn
@@ -8,6 +9,7 @@ from torch import optim
 from torch.utils.data import DataLoader
 import visdom
 import numpy as np
+import argparse
 from model.csnet import CSNet
 from dataloader.drive import Data
 from utils.train_metrics import metrics
@@ -16,31 +18,34 @@ from utils.dice_loss_single_class import dice_coeff_loss
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
-args = {
-    'root'      : '',
-    'data_path' : 'dataset/DRIVE/',
-    'epochs'    : 1000,
-    'lr'        : 0.0001,
-    'snapshot'  : 100,
-    'test_step' : 1,
-    'ckpt_path' : 'checkpoint/',
-    'batch_size': 8,
-}
 
-# # Visdom---------------------------------------------------------
-X, Y = 0, 0.5  # for visdom
-x_acc, y_acc = 0, 0
-x_sen, y_sen = 0, 0
-env, panel = init_visdom_line(X, Y, title='Train Loss', xlabel="iters", ylabel="loss")
-env1, panel1 = init_visdom_line(x_acc, y_acc, title="Accuracy", xlabel="iters", ylabel="accuracy")
-env2, panel2 = init_visdom_line(x_sen, y_sen, title="Sensitivity", xlabel="iters", ylabel="sensitivity")
-# # ---------------------------------------------------------------
+def parse_args():
+    parser = argparse.ArgumentParser(description="CS-Net Training Script")
+    parser.add_argument("data_path", type=str, nargs='?', default="dataset/DRIVE/", help="Path to DRIVE dataset root directory (default: dataset/DRIVE/)")
+    parser.add_argument("--epochs", type=int, default=1000, help="Number of training epochs (default: 1000)")
+    parser.add_argument("--lr", type=float, default=0.0001, help="Learning rate (default: 0.0001)")
+    parser.add_argument("--snapshot", type=int, default=100, help="Snapshot interval for saving checkpoints (default: 100)")
+    parser.add_argument("--test-step", type=int, default=1, help="Test step interval (default: 1)")
+    parser.add_argument("--ckpt-path", type=str, default="checkpoint/", help="Directory to save checkpoints (default: 'checkpoint/')")
+    parser.add_argument("--device-ids", type=str, default="0", help="Comma-separated list of GPU device IDs to use (default: '0')")
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size (default: 8)")
+    return parser.parse_args()
 
-def save_ckpt(net, iter):
-    if not os.path.exists(args['ckpt_path']):
-        os.makedirs(args['ckpt_path'])
-    torch.save(net, args['ckpt_path'] + 'CS_Net_DRIVE_' + str(iter) + '.pkl')
-    print('--->saved model:{}<--- '.format(args['root'] + args['ckpt_path']))
+
+def setup_visdom():
+    X, Y = 0, 0.5  # for visdom
+    x_acc, y_acc = 0, 0
+    x_sen, y_sen = 0, 0
+    env, panel = init_visdom_line(X, Y, title='Train Loss', xlabel="iters", ylabel="loss")
+    env1, panel1 = init_visdom_line(x_acc, y_acc, title="Accuracy", xlabel="iters", ylabel="accuracy")
+    env2, panel2 = init_visdom_line(x_sen, y_sen, title="Sensitivity", xlabel="iters", ylabel="sensitivity")
+    return env, panel, env1, panel1, env2, panel2
+
+def save_ckpt(net, iter, ckpt_path):
+    if not os.path.exists(ckpt_path):
+        os.makedirs(ckpt_path)
+    torch.save(net, os.path.join(ckpt_path, f'CS_Net_DRIVE_{iter}.pkl'))
+    print(f'--->saved model: {ckpt_path}<--- ')
 
 
 # adjust learning rate (poly)
@@ -50,22 +55,27 @@ def adjust_lr(optimizer, base_lr, iter, max_iter, power=0.9):
         param_group['lr'] = lr
 
 
-def train():
+def train(args):
     # set the channels to 3 when the format is RGB, otherwise 1.
+
     net = CSNet(classes=1, channels=3).cuda()
-    net = nn.DataParallel(net, device_ids=[0, 1]).cuda()
-    optimizer = optim.Adam(net.parameters(), lr=args['lr'], weight_decay=0.0005)
+    # Parse device_ids string to list of ints
+    device_ids = [int(i) for i in args.device_ids.split(",") if i.strip() != ""]
+    net = nn.DataParallel(net, device_ids=device_ids).cuda()
+    optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=0.0005)
     critrion = nn.MSELoss().cuda()
     # critrion = nn.CrossEntropyLoss().cuda()
     print("---------------start training------------------")
     # load train dataset
-    train_data = Data(args['data_path'], train=True)
-    batchs_data = DataLoader(train_data, batch_size=args['batch_size'], num_workers=2, shuffle=True)
+    train_data = Data(args.data_path, train=True)
+    batchs_data = DataLoader(train_data, batch_size=args.batch_size, num_workers=2, shuffle=True)
+
+    env, panel, env1, panel1, env2, panel2 = setup_visdom()
 
     iters = 1
     accuracy = 0.
     sensitivty = 0.
-    for epoch in range(args['epochs']):
+    for epoch in range(args.epochs):
         net.train()
         for idx, batch in enumerate(batchs_data):
             image = batch[0].cuda()
@@ -92,24 +102,25 @@ def train():
             update_lines(env2, panel2, x_sen, y_sen)
             # # --------------------------------------------------------------------------------------------
 
-        adjust_lr(optimizer, base_lr=args['lr'], iter=epoch, max_iter=args['epochs'], power=0.9)
-        if (epoch + 1) % args['snapshot'] == 0:
-            save_ckpt(net, epoch + 1)
+        adjust_lr(optimizer, base_lr=args.lr, iter=epoch, max_iter=args.epochs, power=0.9)
+        if (epoch + 1) % args.snapshot == 0:
+            save_ckpt(net, epoch + 1, args.ckpt_path)
 
         # model eval
-        if (epoch + 1) % args['test_step'] == 0:
-            test_acc, test_sen = model_eval(net)
+        if (epoch + 1) % args.test_step == 0:
+            test_acc, test_sen = model_eval(net, args)
             print("Average acc:{0:.4f}, average sen:{1:.4f}".format(test_acc, test_sen))
 
             if (accuracy > test_acc) & (sensitivty > test_sen):
-                save_ckpt(net, epoch + 1 + 8888888)
+                save_ckpt(net, epoch + 1 + 8888888, args.ckpt_path)
                 accuracy = test_acc
                 sensitivty = test_sen
 
 
-def model_eval(net):
+
+def model_eval(net, args):
     print("Start testing model...")
-    test_data = Data(args['data_path'], train=False)
+    test_data = Data(args.data_path, train=False)
     batchs_data = DataLoader(test_data, batch_size=1)
 
     net.eval()
@@ -128,5 +139,7 @@ def model_eval(net):
         return np.mean(Acc), np.mean(Sen)
 
 
+
 if __name__ == '__main__':
-    train()
+    args = parse_args()
+    train(args)
