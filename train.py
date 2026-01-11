@@ -11,7 +11,7 @@ import visdom
 import numpy as np
 import argparse
 from model.csnet import CSNet
-from dataloader.drive import Data
+from dataloader.rnfb import Data
 from utils.train_metrics import metrics
 from utils.visualize import init_visdom_line, update_lines
 from utils.dice_loss_single_class import dice_coeff_loss
@@ -22,6 +22,7 @@ from utils.dice_loss_single_class import dice_coeff_loss
 def parse_args():
     parser = argparse.ArgumentParser(description="CS-Net Training Script")
     parser.add_argument("data_path", type=str, nargs='?', default="dataset/DRIVE/", help="Path to DRIVE dataset root directory (default: dataset/DRIVE/)")
+    parser.add_argument("--rgb", action="store_true", help="Use RGB images (3 channels). If not set, use grayscale (1 channel).")
     parser.add_argument("--epochs", type=int, default=1000, help="Number of training epochs (default: 1000)")
     parser.add_argument("--lr", type=float, default=0.0001, help="Learning rate (default: 0.0001)")
     parser.add_argument("--snapshot", type=int, default=100, help="Snapshot interval for saving checkpoints (default: 100)")
@@ -41,11 +42,17 @@ def setup_visdom():
     env2, panel2 = init_visdom_line(x_sen, y_sen, title="Sensitivity", xlabel="iters", ylabel="sensitivity")
     return env, panel, env1, panel1, env2, panel2
 
-def save_ckpt(net, iter, ckpt_path):
+def get_ckpt_prefix(data_path):
+    # Remove trailing slash, replace / with _, remove file extension if any
+    base = os.path.splitext(data_path.rstrip('/'))[0].replace('/', '_')
+    return f'CS_Net_{base}'
+
+def save_ckpt(net, iter, ckpt_path, ckpt_prefix):
     if not os.path.exists(ckpt_path):
         os.makedirs(ckpt_path)
-    torch.save(net, os.path.join(ckpt_path, f'CS_Net_DRIVE_{iter}.pkl'))
-    print(f'--->saved model: {ckpt_path}<--- ')
+    ckpt_name = f'{ckpt_prefix}_{iter}.pkl'
+    torch.save(net, os.path.join(ckpt_path, ckpt_name))
+    print(f'--->saved model: {os.path.join(ckpt_path, ckpt_name)}<--- ')
 
 
 # adjust learning rate (poly)
@@ -58,7 +65,8 @@ def adjust_lr(optimizer, base_lr, iter, max_iter, power=0.9):
 def train(args):
     # set the channels to 3 when the format is RGB, otherwise 1.
 
-    net = CSNet(classes=1, channels=3).cuda()
+    channels = 3 if args.rgb else 1
+    net = CSNet(classes=1, channels=channels).cuda()
     # Parse device_ids string to list of ints
     device_ids = [int(i) for i in args.device_ids.split(",") if i.strip() != ""]
     net = nn.DataParallel(net, device_ids=device_ids).cuda()
@@ -67,7 +75,7 @@ def train(args):
     # critrion = nn.CrossEntropyLoss().cuda()
     print("---------------start training------------------")
     # load train dataset
-    train_data = Data(args.data_path, train=True)
+    train_data = Data(args.data_path, train=True, rgb=args.rgb)
     batchs_data = DataLoader(train_data, batch_size=args.batch_size, num_workers=2, shuffle=True)
 
     env, panel, env1, panel1, env2, panel2 = setup_visdom()
@@ -75,6 +83,7 @@ def train(args):
     iters = 1
     accuracy = 0.
     sensitivty = 0.
+    ckpt_prefix = get_ckpt_prefix(args.data_path)
     for epoch in range(args.epochs):
         net.train()
         for idx, batch in enumerate(batchs_data):
@@ -104,7 +113,7 @@ def train(args):
 
         adjust_lr(optimizer, base_lr=args.lr, iter=epoch, max_iter=args.epochs, power=0.9)
         if (epoch + 1) % args.snapshot == 0:
-            save_ckpt(net, epoch + 1, args.ckpt_path)
+            save_ckpt(net, epoch + 1, args.ckpt_path, ckpt_prefix)
 
         # model eval
         if (epoch + 1) % args.test_step == 0:
@@ -112,7 +121,7 @@ def train(args):
             print("Average acc:{0:.4f}, average sen:{1:.4f}".format(test_acc, test_sen))
 
             if (accuracy > test_acc) & (sensitivty > test_sen):
-                save_ckpt(net, epoch + 1 + 8888888, args.ckpt_path)
+                save_ckpt(net, epoch + 1 + 8888888, args.ckpt_path, ckpt_prefix)
                 accuracy = test_acc
                 sensitivty = test_sen
 
@@ -120,7 +129,7 @@ def train(args):
 
 def model_eval(net, args):
     print("Start testing model...")
-    test_data = Data(args.data_path, train=False)
+    test_data = Data(args.data_path, train=False, rgb=args.rgb)
     batchs_data = DataLoader(test_data, batch_size=1)
 
     net.eval()
