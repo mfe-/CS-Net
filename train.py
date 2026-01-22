@@ -78,7 +78,7 @@ def train(args):
     train_data = Data(args.data_path, train=True, rgb=args.rgb)
     batchs_data = DataLoader(train_data, batch_size=args.batch_size, num_workers=2, shuffle=True)
 
-    env, panel, env1, panel1, env2, panel2 = setup_visdom()
+    # env, panel, env1, panel1, env2, panel2 = setup_visdom()
 
     iters = 1
     accuracy = 0.
@@ -104,11 +104,11 @@ def train(args):
                                                                                      sen / pred.shape[0]))
             iters += 1
             # # ---------------------------------- visdom --------------------------------------------------
-            X, x_acc, x_sen = iters, iters, iters
-            Y, y_acc, y_sen = loss.item(), acc / pred.shape[0], sen / pred.shape[0]
-            update_lines(env, panel, X, Y)
-            update_lines(env1, panel1, x_acc, y_acc)
-            update_lines(env2, panel2, x_sen, y_sen)
+            # X, x_acc, x_sen = iters, iters, iters
+            # Y, y_acc, y_sen = loss.item(), acc / pred.shape[0], sen / pred.shape[0]
+            # update_lines(env, panel, X, Y)
+            # update_lines(env1, panel1, x_acc, y_acc)
+            # update_lines(env2, panel2, x_sen, y_sen)
             # # --------------------------------------------------------------------------------------------
 
         adjust_lr(optimizer, base_lr=args.lr, iter=epoch, max_iter=args.epochs, power=0.9)
